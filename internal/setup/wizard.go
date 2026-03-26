@@ -169,9 +169,13 @@ func (w *Wizard) configureIntegrations(cfg *config.Config) error {
 	return w.err
 }
 
-// selectModel fetches available models and presents a numbered list.
-// currentModel is pre-selected as the default (marked with →).
+// selectModel fetches available models and presents an interactive list.
+// currentModel is pre-selected (marked with ▶ when the selector opens).
 func (w *Wizard) selectModel(provider, apiKey, currentModel string) string {
+	if w.err != nil {
+		return orDefault(currentModel, defaultModelFor(provider))
+	}
+
 	fallbackDefault := orDefault(currentModel, defaultModelFor(provider))
 
 	fmt.Fprintf(w.out, "Fetching available models...")
@@ -190,62 +194,19 @@ func (w *Wizard) selectModel(provider, apiKey, currentModel string) string {
 
 	fmt.Fprintf(w.out, " found %d model(s)\n\n", len(models))
 
-	// Find indices: current (→) takes priority over provider default (*).
-	currentIdx := -1
-	providerDefaultIdx := -1
-	providerDefault := defaultModelFor(provider)
-	for i, m := range models {
-		if m == currentModel {
-			currentIdx = i + 1
-		}
-		if m == providerDefault {
-			providerDefaultIdx = i + 1
-		}
-	}
-
-	for i, m := range models {
-		var marker string
-		switch {
-		case m == currentModel:
-			marker = "→ " // currently configured
-		case m == providerDefault && currentModel == "":
-			marker = "* " // provider default (only when no current model)
-		default:
-			marker = "  "
-		}
-		fmt.Fprintf(w.out, "  %s%2d. %s\n", marker, i+1, m)
-	}
-	fmt.Fprintln(w.out)
-
-	// Default selection: current model first, then provider default.
-	defaultIdx := currentIdx
+	// Determine which index to pre-select:
+	// current model first, then provider default, then index 0.
+	defaultIdx := indexOfModel(models, currentModel)
 	if defaultIdx < 0 {
-		defaultIdx = providerDefaultIdx
+		defaultIdx = indexOfModel(models, defaultModelFor(provider))
 	}
 
-	hint := "enter number"
-	if defaultIdx > 0 {
-		hint = fmt.Sprintf("enter number, default %d", defaultIdx)
-	}
-
-	w.rl.SetPrompt(fmt.Sprintf("Select model (%s): ", hint))
-	input, err := w.rl.Readline()
+	selected, err := interactiveSelect(models, defaultIdx)
 	if err != nil {
+		w.err = err
 		return fallbackDefault
 	}
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return fallbackDefault
-	}
-
-	if n, err := strconv.Atoi(input); err == nil {
-		if n >= 1 && n <= len(models) {
-			return models[n-1]
-		}
-		fmt.Fprintf(w.out, "Invalid selection, using default (%s)\n", fallbackDefault)
-		return fallbackDefault
-	}
-	return input // literal model name
+	return selected
 }
 
 func (w *Wizard) write(path string, cfg *config.Config) error {
@@ -397,6 +358,16 @@ func orDefault(val, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// indexOfModel returns the index of target in models, or -1 if not found.
+func indexOfModel(models []string, target string) int {
+	for i, m := range models {
+		if m == target {
+			return i
+		}
+	}
+	return -1
 }
 
 // last4 returns the last 4 characters of s, or all of s if shorter.
