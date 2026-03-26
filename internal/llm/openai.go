@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 )
 
 const openaiAPIURL = "https://api.openai.com/v1/chat/completions"
+const openaiModelsURL = "https://api.openai.com/v1/models"
 
 type OpenAIProvider struct {
 	apiKey string
@@ -137,4 +140,45 @@ func (p *OpenAIProvider) buildTools(tools []ToolDefinition) []map[string]any {
 		})
 	}
 	return out
+}
+
+// ListOpenAIModels fetches chat-capable models from the OpenAI API.
+// The full list contains embeddings, whisper, etc., so we filter to
+// models whose IDs start with "gpt-", "o1", or "o3".
+func ListOpenAIModels(ctx context.Context, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openaiModelsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("%s", result.Error.Message)
+	}
+
+	var models []string
+	for _, m := range result.Data {
+		if strings.HasPrefix(m.ID, "gpt-") || strings.HasPrefix(m.ID, "o1") || strings.HasPrefix(m.ID, "o3") {
+			models = append(models, m.ID)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(models)))
+	return models, nil
 }

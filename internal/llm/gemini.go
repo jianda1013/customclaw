@@ -10,6 +10,7 @@ import (
 )
 
 const geminiAPIURL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s"
+const geminiModelsURL = "https://generativelanguage.googleapis.com/v1beta/models?key=%s"
 
 type GeminiProvider struct {
 	apiKey string
@@ -159,4 +160,48 @@ func buildGeminiProperties(props map[string]PropertySchema) map[string]any {
 		}
 	}
 	return out
+}
+
+// ListGeminiModels fetches models that support generateContent from the Gemini API.
+func ListGeminiModels(ctx context.Context, apiKey string) ([]string, error) {
+	url := fmt.Sprintf(geminiModelsURL, apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name                       string   `json:"name"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("%s", result.Error.Message)
+	}
+
+	var models []string
+	for _, m := range result.Models {
+		for _, method := range m.SupportedGenerationMethods {
+			if method == "generateContent" {
+				// Strip "models/" prefix → "gemini-2.0-flash"
+				name := strings.TrimPrefix(m.Name, "models/")
+				models = append(models, name)
+				break
+			}
+		}
+	}
+	return models, nil
 }

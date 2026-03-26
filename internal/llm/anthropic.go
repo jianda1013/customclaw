@@ -9,6 +9,7 @@ import (
 )
 
 const anthropicAPIURL = "https://api.anthropic.com/v1/messages"
+const anthropicModelsURL = "https://api.anthropic.com/v1/models"
 
 type AnthropicProvider struct {
 	apiKey string
@@ -124,4 +125,41 @@ func (p *AnthropicProvider) buildTools(tools []ToolDefinition) []map[string]any 
 		})
 	}
 	return out
+}
+
+// ListModels fetches available Claude models from the Anthropic API.
+func ListAnthropicModels(ctx context.Context, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, anthropicModelsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("%s", result.Error.Message)
+	}
+
+	models := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, m.ID)
+	}
+	return models, nil
 }
