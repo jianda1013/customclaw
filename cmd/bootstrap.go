@@ -5,7 +5,9 @@ import (
 	"customclaw/internal/config"
 	"customclaw/internal/llm"
 	"customclaw/internal/tools"
+	"errors"
 	"fmt"
+	"os"
 )
 
 // bootstrap loads config and actions, builds the LLM provider, tool registry,
@@ -13,6 +15,9 @@ import (
 func bootstrap(configPath, actionsPath string) (*config.Config, *config.Actions, *agent.Agent, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, nil, fmt.Errorf("%s not found — run './customclaw setup' to configure", configPath)
+		}
 		return nil, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
