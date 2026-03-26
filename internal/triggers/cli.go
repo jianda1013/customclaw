@@ -4,9 +4,11 @@ import (
 	"context"
 	"customclaw/internal/agent"
 	"customclaw/internal/config"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/chzyer/readline"
@@ -24,9 +26,15 @@ func NewCLITrigger(actions *config.Actions, ag *agent.Agent) *CLITrigger {
 
 // Run executes a single one-shot command.
 func (c *CLITrigger) Run(command string) error {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	result, err := c.agent.Run(ctx, command, c.actions.Tools, nil)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stdout, "\ncancelled.")
+			return nil
+		}
 		return err
 	}
 	fmt.Println(result)
@@ -34,7 +42,11 @@ func (c *CLITrigger) Run(command string) error {
 }
 
 // Chat starts an interactive REPL with readline support:
-// arrow keys for cursor movement, ↑/↓ for history, Ctrl+C to cancel a line.
+// - ←/→ move the cursor within the line
+// - ↑/↓ scroll through command history (last 200 entries)
+// - Ctrl+C at the prompt clears the current line
+// - Ctrl+C during an agent run cancels it and returns to the prompt
+// - Ctrl+D or 'exit' quits
 func (c *CLITrigger) Chat() error {
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
@@ -53,7 +65,7 @@ func (c *CLITrigger) Chat() error {
 	for {
 		line, err := rl.Readline()
 		if err == readline.ErrInterrupt {
-			// Ctrl+C clears the current line; loop continues.
+			// Ctrl+C at the prompt — clear the line, stay in the loop.
 			continue
 		}
 		if err == io.EOF {
@@ -73,9 +85,17 @@ func (c *CLITrigger) Chat() error {
 			break
 		}
 
-		ctx := context.Background()
+		// Create a context that is cancelled when the user presses Ctrl+C.
+		// This interrupts any in-flight HTTP call inside the agent.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		result, err := c.agent.Run(ctx, line, c.actions.Tools, nil)
+		stop() // always release the signal handler once the run is done
+
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stdout, "\ncancelled.")
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
