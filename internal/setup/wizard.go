@@ -2,11 +2,15 @@ package setup
 
 import (
 	"bufio"
+	"context"
 	"customclaw/internal/config"
+	"customclaw/internal/llm"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -58,16 +62,87 @@ func (w *Wizard) configureLLM(cfg *config.Config) error {
 	provider := w.prompt("Provider", "anthropic", "anthropic, openai, gemini")
 	cfg.LLM.Provider = provider
 
-	defaultModel := defaultModelFor(provider)
-	cfg.LLM.Model = w.prompt("Model", defaultModel, "")
-
 	apiKey := w.secret("API Key")
 	if apiKey == "" {
 		return fmt.Errorf("LLM API key is required")
 	}
 	cfg.LLM.APIKey = apiKey
 
+	cfg.LLM.Model = w.selectModel(provider, apiKey)
 	return nil
+}
+
+// selectModel fetches available models for the given provider and API key,
+// then lets the user pick one from a numbered list.
+// Falls back to a free-text prompt if the fetch fails.
+func (w *Wizard) selectModel(provider, apiKey string) string {
+	defaultModel := defaultModelFor(provider)
+
+	fmt.Fprintf(w.out, "Fetching available models...")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	models, err := fetchModels(ctx, provider, apiKey)
+	if err != nil {
+		fmt.Fprintf(w.out, " failed (%s)\n", err)
+		return w.prompt("Model", defaultModel, "")
+	}
+	if len(models) == 0 {
+		fmt.Fprintln(w.out, " no models returned.")
+		return w.prompt("Model", defaultModel, "")
+	}
+
+	fmt.Fprintf(w.out, " found %d model(s)\n\n", len(models))
+
+	// Find the index of the default model so we can highlight it.
+	defaultIdx := -1
+	for i, m := range models {
+		marker := "  "
+		if m == defaultModel {
+			marker = "* "
+			defaultIdx = i + 1
+		}
+		fmt.Fprintf(w.out, "  %s%2d. %s\n", marker, i+1, m)
+	}
+	fmt.Fprintln(w.out)
+
+	hint := "enter number"
+	if defaultIdx > 0 {
+		hint = fmt.Sprintf("enter number, default %d", defaultIdx)
+	}
+	fmt.Fprintf(w.out, "Select model (%s): ", hint)
+
+	if !w.scanner.Scan() {
+		return defaultModel
+	}
+	input := strings.TrimSpace(w.scanner.Text())
+	if input == "" {
+		return defaultModel
+	}
+
+	// Accept a number (pick from list) or a raw model name (custom / unlisted).
+	if n, err := strconv.Atoi(input); err == nil {
+		if n >= 1 && n <= len(models) {
+			return models[n-1]
+		}
+		fmt.Fprintf(w.out, "Invalid selection, using default (%s)\n", defaultModel)
+		return defaultModel
+	}
+	return input // treat as a literal model name
+}
+
+// fetchModels dispatches to the right provider API.
+func fetchModels(ctx context.Context, provider, apiKey string) ([]string, error) {
+	switch provider {
+	case "anthropic":
+		return llm.ListAnthropicModels(ctx, apiKey)
+	case "openai":
+		return llm.ListOpenAIModels(ctx, apiKey)
+	case "gemini":
+		return llm.ListGeminiModels(ctx, apiKey)
+	default:
+		return nil, fmt.Errorf("unknown provider %q", provider)
+	}
 }
 
 func (w *Wizard) configureServer(cfg *config.Config) error {
