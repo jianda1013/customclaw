@@ -5,6 +5,7 @@ import (
 	"customclaw/internal/config"
 	"customclaw/internal/llm"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,24 +36,41 @@ func NewWizard() (*Wizard, error) {
 func (w *Wizard) Close() { w.rl.Close() }
 
 // Run executes the full setup wizard and writes config.json.
+// If outputPath already exists its values are loaded as defaults so the
+// user can press Enter to keep any field unchanged.
 func (w *Wizard) Run(outputPath string) error {
+	// Load existing config as the starting point (all fields become defaults).
+	existing, err := config.Load(outputPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load existing config: %w", err)
+	}
+	if existing == nil {
+		existing = &config.Config{}
+	}
+
+	isUpdate := existing.LLM.APIKey != ""
+
 	w.header("Welcome to customclaw!")
-	fmt.Fprintln(w.out, "Let's configure your instance. Press Enter to accept defaults.")
+	if isUpdate {
+		fmt.Fprintln(w.out, "Updating existing configuration. Press Enter to keep current values.")
+	} else {
+		fmt.Fprintln(w.out, "Let's configure your instance. Press Enter to accept defaults.")
+	}
 	fmt.Fprintln(w.out)
 
-	cfg := &config.Config{}
+	cfg := *existing // copy — we'll overwrite field by field
 
-	if err := w.configureLLM(cfg); err != nil {
+	if err := w.configureLLM(&cfg); err != nil {
 		return err
 	}
-	if err := w.configureServer(cfg); err != nil {
+	if err := w.configureServer(&cfg); err != nil {
 		return err
 	}
-	if err := w.configureIntegrations(cfg); err != nil {
+	if err := w.configureIntegrations(&cfg); err != nil {
 		return err
 	}
 
-	if err := w.write(outputPath, cfg); err != nil {
+	if err := w.write(outputPath, &cfg); err != nil {
 		return err
 	}
 
@@ -65,25 +83,30 @@ func (w *Wizard) Run(outputPath string) error {
 func (w *Wizard) configureLLM(cfg *config.Config) error {
 	w.section("LLM Configuration")
 
-	provider := w.prompt("Provider", "anthropic", "anthropic, openai, gemini")
-	cfg.LLM.Provider = provider
+	providerDefault := cfg.LLM.Provider
+	if providerDefault == "" {
+		providerDefault = "anthropic"
+	}
+	cfg.LLM.Provider = w.prompt("Provider", providerDefault, "anthropic, openai, gemini")
 
-	apiKey := w.secret("API Key")
+	apiKey := w.secret("API Key", cfg.LLM.APIKey)
 	if apiKey == "" {
 		return fmt.Errorf("LLM API key is required")
 	}
 	cfg.LLM.APIKey = apiKey
 
-	cfg.LLM.Model = w.selectModel(provider, apiKey)
+	cfg.LLM.Model = w.selectModel(cfg.LLM.Provider, cfg.LLM.APIKey, cfg.LLM.Model)
 	return nil
 }
 
 func (w *Wizard) configureServer(cfg *config.Config) error {
 	w.section("Server Configuration")
-	portStr := w.prompt("Webhook server port", "8080", "")
-	port := 8080
-	fmt.Sscanf(portStr, "%d", &port)
-	cfg.Server.Port = port
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	portStr := w.prompt("Webhook server port", strconv.Itoa(port), "")
+	fmt.Sscanf(portStr, "%d", &cfg.Server.Port)
 	return nil
 }
 
@@ -92,36 +115,44 @@ func (w *Wizard) configureIntegrations(cfg *config.Config) error {
 	fmt.Fprintln(w.out, "Choose which integrations to enable.")
 	fmt.Fprintln(w.out)
 
-	if w.confirm("GitHub", true) {
-		cfg.Integrations.GitHub.Token = w.secret("  GitHub personal access token")
+	// Default to y if integration is already configured.
+	if w.confirm("GitHub", cfg.Integrations.GitHub.Token != "") {
+		cfg.Integrations.GitHub.Token = w.secret("  GitHub personal access token", cfg.Integrations.GitHub.Token)
+	} else {
+		cfg.Integrations.GitHub.Token = ""
 	}
 
 	fmt.Fprintln(w.out)
-	if w.confirm("Jira", false) {
-		cfg.Integrations.Jira.BaseURL = w.prompt("  Jira base URL", "https://your-org.atlassian.net", "")
-		cfg.Integrations.Jira.User = w.prompt("  Jira user email", "", "")
-		cfg.Integrations.Jira.APIToken = w.secret("  Jira API token")
-		cfg.Integrations.Jira.WebhookSecret = w.secret("  Jira webhook secret (optional, Enter to skip)")
+	if w.confirm("Jira", cfg.Integrations.Jira.APIToken != "") {
+		cfg.Integrations.Jira.BaseURL = w.prompt("  Jira base URL", orDefault(cfg.Integrations.Jira.BaseURL, "https://your-org.atlassian.net"), "")
+		cfg.Integrations.Jira.User = w.prompt("  Jira user email", cfg.Integrations.Jira.User, "")
+		cfg.Integrations.Jira.APIToken = w.secret("  Jira API token", cfg.Integrations.Jira.APIToken)
+		cfg.Integrations.Jira.WebhookSecret = w.secret("  Jira webhook secret (optional, Enter to skip)", cfg.Integrations.Jira.WebhookSecret)
+	} else {
+		cfg.Integrations.Jira = config.JiraConfig{}
 	}
 
 	fmt.Fprintln(w.out)
-	if w.confirm("Discord", false) {
-		cfg.Integrations.Discord.WebhookURL = w.prompt("  Discord webhook URL", "", "")
+	if w.confirm("Discord", cfg.Integrations.Discord.WebhookURL != "") {
+		cfg.Integrations.Discord.WebhookURL = w.prompt("  Discord webhook URL", cfg.Integrations.Discord.WebhookURL, "")
+	} else {
+		cfg.Integrations.Discord.WebhookURL = ""
 	}
 
 	fmt.Fprintln(w.out)
-	if w.confirm("Google Chat", false) {
-		cfg.Integrations.GoogleChat.WebhookURL = w.prompt("  Google Chat webhook URL", "", "")
+	if w.confirm("Google Chat", cfg.Integrations.GoogleChat.WebhookURL != "") {
+		cfg.Integrations.GoogleChat.WebhookURL = w.prompt("  Google Chat webhook URL", cfg.Integrations.GoogleChat.WebhookURL, "")
+	} else {
+		cfg.Integrations.GoogleChat.WebhookURL = ""
 	}
 
 	return nil
 }
 
-// selectModel fetches available models for the given provider and API key,
-// then lets the user pick one from a numbered list.
-// Falls back to a free-text prompt if the fetch fails.
-func (w *Wizard) selectModel(provider, apiKey string) string {
-	defaultModel := defaultModelFor(provider)
+// selectModel fetches available models and presents a numbered list.
+// currentModel is pre-selected as the default (marked with →).
+func (w *Wizard) selectModel(provider, apiKey, currentModel string) string {
+	fallbackDefault := orDefault(currentModel, defaultModelFor(provider))
 
 	fmt.Fprintf(w.out, "Fetching available models...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -130,25 +161,47 @@ func (w *Wizard) selectModel(provider, apiKey string) string {
 	models, err := fetchModels(ctx, provider, apiKey)
 	if err != nil {
 		fmt.Fprintf(w.out, " failed (%s)\n", err)
-		return w.prompt("Model", defaultModel, "")
+		return w.prompt("Model", fallbackDefault, "")
 	}
 	if len(models) == 0 {
 		fmt.Fprintln(w.out, " no models returned.")
-		return w.prompt("Model", defaultModel, "")
+		return w.prompt("Model", fallbackDefault, "")
 	}
 
 	fmt.Fprintf(w.out, " found %d model(s)\n\n", len(models))
 
-	defaultIdx := -1
+	// Find indices: current (→) takes priority over provider default (*).
+	currentIdx := -1
+	providerDefaultIdx := -1
+	providerDefault := defaultModelFor(provider)
 	for i, m := range models {
-		marker := "  "
-		if m == defaultModel {
-			marker = "* "
-			defaultIdx = i + 1
+		if m == currentModel {
+			currentIdx = i + 1
+		}
+		if m == providerDefault {
+			providerDefaultIdx = i + 1
+		}
+	}
+
+	for i, m := range models {
+		var marker string
+		switch {
+		case m == currentModel:
+			marker = "→ " // currently configured
+		case m == providerDefault && currentModel == "":
+			marker = "* " // provider default (only when no current model)
+		default:
+			marker = "  "
 		}
 		fmt.Fprintf(w.out, "  %s%2d. %s\n", marker, i+1, m)
 	}
 	fmt.Fprintln(w.out)
+
+	// Default selection: current model first, then provider default.
+	defaultIdx := currentIdx
+	if defaultIdx < 0 {
+		defaultIdx = providerDefaultIdx
+	}
 
 	hint := "enter number"
 	if defaultIdx > 0 {
@@ -158,21 +211,21 @@ func (w *Wizard) selectModel(provider, apiKey string) string {
 	w.rl.SetPrompt(fmt.Sprintf("Select model (%s): ", hint))
 	input, err := w.rl.Readline()
 	if err != nil {
-		return defaultModel
+		return fallbackDefault
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return defaultModel
+		return fallbackDefault
 	}
 
 	if n, err := strconv.Atoi(input); err == nil {
 		if n >= 1 && n <= len(models) {
 			return models[n-1]
 		}
-		fmt.Fprintf(w.out, "Invalid selection, using default (%s)\n", defaultModel)
-		return defaultModel
+		fmt.Fprintf(w.out, "Invalid selection, using default (%s)\n", fallbackDefault)
+		return fallbackDefault
 	}
-	return input
+	return input // literal model name
 }
 
 func (w *Wizard) write(path string, cfg *config.Config) error {
@@ -186,7 +239,7 @@ func (w *Wizard) write(path string, cfg *config.Config) error {
 	return nil
 }
 
-// prompt reads a line with arrow-key editing support.
+// prompt reads a line; defaultVal is shown and returned on empty input.
 func (w *Wizard) prompt(label, defaultVal, hint string) string {
 	display := label
 	if hint != "" {
@@ -208,30 +261,43 @@ func (w *Wizard) prompt(label, defaultVal, hint string) string {
 	return line
 }
 
-// secret reads input with characters masked as '*'.
-func (w *Wizard) secret(label string) string {
-	// Create a short-lived readline instance with masking enabled.
+// secret reads masked input. If currentVal is set the prompt shows
+// "(currently set, press Enter to keep)" and returns currentVal on empty input.
+func (w *Wizard) secret(label, currentVal string) string {
+	promptStr := label
+	if currentVal != "" {
+		promptStr += " (currently set, press Enter to keep)"
+	}
+	promptStr += ": "
+
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:     label + ": ",
+		Prompt:     promptStr,
 		EnableMask: true,
 		MaskRune:   '*',
 	})
 	if err != nil {
-		// Fallback: read normally without masking.
-		w.rl.SetPrompt(label + ": ")
+		w.rl.SetPrompt(promptStr)
 		line, _ := w.rl.Readline()
-		return strings.TrimSpace(line)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return currentVal
+		}
+		return line
 	}
 	defer rl.Close()
 
 	line, err := rl.Readline()
 	if err != nil && err != io.EOF {
-		return ""
+		return currentVal
 	}
-	return strings.TrimSpace(line)
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return currentVal
+	}
+	return line
 }
 
-// confirm prints a yes/no prompt and returns true if the user answers y.
+// confirm prints a yes/no prompt; defaultYes controls the default answer.
 func (w *Wizard) confirm(label string, defaultYes bool) bool {
 	def := "n"
 	if defaultYes {
@@ -281,4 +347,11 @@ func defaultModelFor(provider string) string {
 	default:
 		return "claude-sonnet-4-6"
 	}
+}
+
+func orDefault(val, fallback string) string {
+	if val != "" {
+		return val
+	}
+	return fallback
 }
