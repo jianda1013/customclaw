@@ -16,10 +16,14 @@ import (
 	"github.com/chzyer/readline"
 )
 
+// ErrInterrupted is returned by Run when the user presses Ctrl+C or Ctrl+D.
+var ErrInterrupted = errors.New("setup interrupted")
+
 // Wizard walks the user through an interactive configuration setup.
 type Wizard struct {
 	rl  *readline.Instance
 	out *os.File
+	err error // sticky: set on first interrupt, short-circuits all later prompts
 }
 
 func NewWizard() (*Wizard, error) {
@@ -61,13 +65,13 @@ func (w *Wizard) Run(outputPath string) error {
 	cfg := *existing // copy — we'll overwrite field by field
 
 	if err := w.configureLLM(&cfg); err != nil {
-		return err
+		return w.interruptedOrErr(err)
 	}
 	if err := w.configureServer(&cfg); err != nil {
-		return err
+		return w.interruptedOrErr(err)
 	}
 	if err := w.configureIntegrations(&cfg); err != nil {
-		return err
+		return w.interruptedOrErr(err)
 	}
 
 	if err := w.write(outputPath, &cfg); err != nil {
@@ -88,15 +92,21 @@ func (w *Wizard) configureLLM(cfg *config.Config) error {
 		providerDefault = "anthropic"
 	}
 	cfg.LLM.Provider = w.prompt("Provider", providerDefault, "anthropic, openai, gemini")
+	if w.err != nil {
+		return w.err
+	}
 
 	apiKey := w.secret("API Key", cfg.LLM.APIKey)
+	if w.err != nil {
+		return w.err
+	}
 	if apiKey == "" {
 		return fmt.Errorf("LLM API key is required")
 	}
 	cfg.LLM.APIKey = apiKey
 
 	cfg.LLM.Model = w.selectModel(cfg.LLM.Provider, cfg.LLM.APIKey, cfg.LLM.Model)
-	return nil
+	return w.err
 }
 
 func (w *Wizard) configureServer(cfg *config.Config) error {
@@ -106,6 +116,9 @@ func (w *Wizard) configureServer(cfg *config.Config) error {
 		port = 8080
 	}
 	portStr := w.prompt("Webhook server port", strconv.Itoa(port), "")
+	if w.err != nil {
+		return w.err
+	}
 	fmt.Sscanf(portStr, "%d", &cfg.Server.Port)
 	return nil
 }
@@ -115,11 +128,13 @@ func (w *Wizard) configureIntegrations(cfg *config.Config) error {
 	fmt.Fprintln(w.out, "Choose which integrations to enable.")
 	fmt.Fprintln(w.out)
 
-	// Default to y if integration is already configured.
 	if w.confirm("GitHub", cfg.Integrations.GitHub.Token != "") {
 		cfg.Integrations.GitHub.Token = w.secret("  GitHub personal access token", cfg.Integrations.GitHub.Token)
 	} else {
 		cfg.Integrations.GitHub.Token = ""
+	}
+	if w.err != nil {
+		return w.err
 	}
 
 	fmt.Fprintln(w.out)
@@ -131,12 +146,18 @@ func (w *Wizard) configureIntegrations(cfg *config.Config) error {
 	} else {
 		cfg.Integrations.Jira = config.JiraConfig{}
 	}
+	if w.err != nil {
+		return w.err
+	}
 
 	fmt.Fprintln(w.out)
 	if w.confirm("Discord", cfg.Integrations.Discord.WebhookURL != "") {
 		cfg.Integrations.Discord.WebhookURL = w.prompt("  Discord webhook URL", cfg.Integrations.Discord.WebhookURL, "")
 	} else {
 		cfg.Integrations.Discord.WebhookURL = ""
+	}
+	if w.err != nil {
+		return w.err
 	}
 
 	fmt.Fprintln(w.out)
@@ -145,8 +166,7 @@ func (w *Wizard) configureIntegrations(cfg *config.Config) error {
 	} else {
 		cfg.Integrations.GoogleChat.WebhookURL = ""
 	}
-
-	return nil
+	return w.err
 }
 
 // selectModel fetches available models and presents a numbered list.
@@ -240,7 +260,11 @@ func (w *Wizard) write(path string, cfg *config.Config) error {
 }
 
 // prompt reads a line; defaultVal is shown and returned on empty input.
+// If a previous interrupt was recorded it returns defaultVal immediately.
 func (w *Wizard) prompt(label, defaultVal, hint string) string {
+	if w.err != nil {
+		return defaultVal
+	}
 	display := label
 	if hint != "" {
 		display += " [" + hint + "]"
@@ -251,7 +275,13 @@ func (w *Wizard) prompt(label, defaultVal, hint string) string {
 
 	w.rl.SetPrompt(display + ": ")
 	line, err := w.rl.Readline()
+	if err == readline.ErrInterrupt || err == io.EOF {
+		fmt.Fprintln(w.out)
+		w.err = ErrInterrupted
+		return defaultVal
+	}
 	if err != nil {
+		w.err = err
 		return defaultVal
 	}
 	line = strings.TrimSpace(line)
@@ -264,7 +294,11 @@ func (w *Wizard) prompt(label, defaultVal, hint string) string {
 // secret reads masked input. If currentVal is set the prompt shows the last
 // 4 characters so the user can confirm which key is stored, then returns
 // currentVal on empty input.
+// If a previous interrupt was recorded it returns currentVal immediately.
 func (w *Wizard) secret(label, currentVal string) string {
+	if w.err != nil {
+		return currentVal
+	}
 	promptStr := label
 	if currentVal != "" {
 		promptStr += fmt.Sprintf(" (currently: ...%s, press Enter to keep)", last4(currentVal))
@@ -277,8 +311,14 @@ func (w *Wizard) secret(label, currentVal string) string {
 		MaskRune:   '*',
 	})
 	if err != nil {
+		// Fallback: use the main readline instance without masking.
 		w.rl.SetPrompt(promptStr)
-		line, _ := w.rl.Readline()
+		line, readErr := w.rl.Readline()
+		if readErr == readline.ErrInterrupt || readErr == io.EOF {
+			fmt.Fprintln(w.out)
+			w.err = ErrInterrupted
+			return currentVal
+		}
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return currentVal
@@ -288,7 +328,9 @@ func (w *Wizard) secret(label, currentVal string) string {
 	defer rl.Close()
 
 	line, err := rl.Readline()
-	if err != nil && err != io.EOF {
+	if err == readline.ErrInterrupt || err == io.EOF {
+		fmt.Fprintln(w.out)
+		w.err = ErrInterrupted
 		return currentVal
 	}
 	line = strings.TrimSpace(line)
@@ -363,4 +405,14 @@ func last4(s string) string {
 		return s
 	}
 	return s[len(s)-4:]
+}
+
+// interruptedOrErr prints a clean message for ErrInterrupted and returns it,
+// or returns the original error for any other error type.
+func (w *Wizard) interruptedOrErr(err error) error {
+	if errors.Is(err, ErrInterrupted) {
+		fmt.Fprintln(w.out, "\nSetup cancelled. No changes were saved.")
+		return nil // exit 0, not an error
+	}
+	return err
 }
