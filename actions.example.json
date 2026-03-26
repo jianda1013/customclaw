@@ -1,0 +1,33 @@
+{
+  "tools": [
+    "notify_discord",
+    "notify_google_chat",
+    "github_create_branch",
+    "github_create_issue",
+    "github_create_mr",
+    "jira_get_ticket",
+    "llm_check_description"
+  ],
+  "workflows": [
+    {
+      "name": "jira-ticket-created",
+      "trigger": {
+        "type": "webhook",
+        "service": "jira",
+        "event": "issue_created",
+        "path": "/webhook/jira"
+      },
+      "goal": "A new Jira ticket was created. Check the description quality and give feedback. Notify the team on Discord with the ticket summary and feedback. Create a feature branch in GitHub named after the ticket ID. Create a linked GitHub issue with the ticket details."
+    },
+    {
+      "name": "github-pr-opened",
+      "trigger": {
+        "type": "webhook",
+        "service": "github",
+        "event": "pull_request.opened",
+        "path": "/webhook/github"
+      },
+      "goal": "A new GitHub pull request was opened. Notify the team on Discord with the PR title, author, and link."
+    }
+  ]
+}

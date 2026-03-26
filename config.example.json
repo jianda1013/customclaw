@@ -1,0 +1,27 @@
+{
+  "server": {
+    "port": 8080
+  },
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "api_key": "YOUR_API_KEY_HERE"
+  },
+  "integrations": {
+    "discord": {
+      "webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"
+    },
+    "google_chat": {
+      "webhook_url": "https://chat.googleapis.com/YOUR_WEBHOOK_URL"
+    },
+    "github": {
+      "token": "ghp_YOUR_GITHUB_TOKEN"
+    },
+    "jira": {
+      "base_url": "https://your-org.atlassian.net",
+      "webhook_secret": "YOUR_WEBHOOK_SECRET",
+      "user": "you@example.com",
+      "api_token": "YOUR_JIRA_API_TOKEN"
+    }
+  }
+}
