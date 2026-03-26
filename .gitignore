@@ -1,0 +1,5 @@
+customclaw
+config.json
+actions.json
+*.env
+.DS_Store
