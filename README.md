@@ -6,88 +6,175 @@ A local AI agent service that automates workflows across external services (Jira
 
 customclaw supports two ways to trigger a workflow:
 
-**1. Webhook workflow** — an external service (e.g. Jira) sends a webhook event to customclaw. The LLM reads the event, decides which tools to invoke, and executes them in sequence.
+**1. Webhook workflow** — an external service (e.g. Jira) POSTs an event to customclaw. The LLM reads the event, decides which tools to invoke, and executes them.
 
 **2. User command workflow** — you type a natural language command in the terminal. The LLM interprets the intent, picks the right tools, and carries out the actions.
 
 Both modes share the same tool registry and agentic loop underneath.
 
 ```
-Webhook (POST /webhook/jira)          CLI ("create branch for JIRA-123")
-              \                                      /
-               \                                    /
-                ──────────────┬────────────────────
-                              |
-                         Agent Loop
-                    (LLM + tool calling)
-                              |
-                       Tool Registry
-          [notify_discord]  [github_create_branch]
-          [github_create_mr]  [jira_get_ticket]  ...
-                              |
-                    External Services
+Webhook (POST /webhook/jira)       CLI ("create branch for JIRA-123")
+              \                                    /
+               ──────────────┬────────────────────
+                             |
+                        Agent Loop
+                   (LLM + tool calling)
+                             |
+                      Tool Registry
+         [notify_discord]  [github_create_branch]
+         [github_create_mr]  [jira_get_ticket]  ...
+                             |
+                   External Services
 ```
 
 ## Features
 
-- LLM-driven tool selection — define a goal, let the agent decide which tools to call
-- Pre-defined webhook workflows — trigger automations from Jira, GitHub, GitLab, ClickUp
-- CLI interface — run one-shot commands or use the interactive REPL
-- Multi-LLM support — bring your own API key; switch between OpenAI, Anthropic, and others
-- JSON-defined actions — no code needed to define new workflows
-- Integrations: GitHub, GitLab, Jira, Discord, Google Chat (more planned)
+- **Interactive setup wizard** — guided first-run configuration with arrow-key model selection and current-value defaults on re-run
+- **Multi-LLM support** — Anthropic, OpenAI, and Google Gemini; models fetched live from the provider API
+- **LLM-driven tool selection** — define a goal, let the agent decide which tools to call and in what order
+- **Webhook workflows** — trigger automations from Jira, GitHub, GitLab, ClickUp
+- **CLI workflows** — one-shot `run` commands and an interactive `chat` REPL with command history
+- **JSON-defined actions** — configure tools and workflows without writing code
+- **Integrations** — GitHub, Jira, Discord, Google Chat
 
-## Installation
+## Quick start
 
 > Requires Go 1.22+
 
 ```bash
-git clone https://github.com/your-org/customclaw.git
+git clone https://github.com/jianda1013/customclaw.git
 cd customclaw
 go build -o customclaw ./cmd
+./customclaw setup
 ```
 
-## Configuration
+## Setup wizard
 
-customclaw uses two config files in the project root.
+Run `./customclaw setup` to configure everything interactively. Re-running it shows your current values as defaults — press Enter to keep any field unchanged.
+
+```
+──────────────────────────────────────────────────────
+ Welcome to customclaw!
+──────────────────────────────────────────────────────
+Updating existing configuration. Press Enter to keep current values.
+
+── LLM Configuration ───────────────────────────────────────────────
+Provider [anthropic, openai, gemini] (anthropic):
+API Key (currently: ...a3f2, press Enter to keep): ****
+
+Fetching available models... found 8 model(s)
+
+  ▶ claude-sonnet-4-6         ← ↑/↓ to navigate, Enter to select
+    claude-opus-4-6
+    claude-haiku-4-5-20251001
+    ...
+
+── Server Configuration ────────────────────────────────────────────
+Webhook server port (8080):
+
+── Integrations ────────────────────────────────────────────────────
+GitHub [y/n] (y):
+  GitHub personal access token (currently: ...kQ9x, press Enter to keep):
+Jira [y/n] (n):
+Discord [y/n] (n):
+Google Chat [y/n] (n):
+
+Configure workflows (actions.json) now [y/n] (n): y
+
+── Tools ───────────────────────────────────────────────────────────
+  [x] notify_discord          ← Space to toggle, Enter to confirm
+  [x] github_create_branch
+  [ ] github_create_issue
+  ...
+
+── Workflows ───────────────────────────────────────────────────────
+  Workflow name: jira-ticket-created
+  Trigger type: ▶ webhook
+  Service:      ▶ jira
+  Event (issue_created):
+  Webhook path (/webhook/jira):
+  Goal: Check description quality, notify Discord, create a branch
+```
+
+**Keyboard shortcuts in the wizard:**
+
+| Key | Action |
+|---|---|
+| ↑ / ↓ | Navigate list |
+| Enter | Confirm / accept default |
+| Space | Toggle checkbox (tool selection) |
+| Ctrl+C | Cancel — no changes saved |
+| Ctrl+D | Same as Ctrl+C |
+
+## Commands
+
+```bash
+# First-time (or update) configuration
+./customclaw setup
+
+# Start the webhook server
+./customclaw start
+
+# One-shot command
+./customclaw run "check JIRA-123 and create a feature branch"
+
+# Interactive REPL (↑/↓ for history, Ctrl+C to cancel a line, Ctrl+D to quit)
+./customclaw chat
+
+# Validate config.json and actions.json
+./customclaw validate
+
+# List all registered tools
+./customclaw tools
+```
+
+Use `--config` and `--actions` to point to non-default files (useful for testing):
+
+```bash
+./customclaw --config /tmp/test.json --actions /tmp/test-actions.json setup
+```
+
+## Webhook server
+
+```bash
+./customclaw start
+# customclaw listening on :8080
+# registered webhook: POST /webhook/jira → workflow 'jira-ticket-created'
+```
+
+Configure your external service to POST events to `http://your-host:8080/webhook/jira`.
+
+> For local development, expose the port with a tunnel: `ngrok http 8080`
+
+## Configuration files
 
 ### config.json
 
-Global settings: LLM provider, API keys, server port, integration credentials.
-
 ```json
 {
-  "server": {
-    "port": 8080
-  },
+  "server": { "port": 8080 },
   "llm": {
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
     "api_key": "sk-ant-..."
   },
   "integrations": {
-    "discord": {
-      "webhook_url": "https://discord.com/api/webhooks/..."
-    },
-    "google_chat": {
-      "webhook_url": "https://chat.googleapis.com/..."
-    },
-    "github": {
-      "token": "ghp_..."
-    },
+    "discord":     { "webhook_url": "https://discord.com/api/webhooks/..." },
+    "google_chat": { "webhook_url": "https://chat.googleapis.com/..." },
+    "github":      { "token": "ghp_..." },
     "jira": {
-      "base_url": "https://your-org.atlassian.net",
+      "base_url":       "https://your-org.atlassian.net",
       "webhook_secret": "...",
-      "user": "you@example.com",
-      "api_token": "..."
+      "user":           "you@example.com",
+      "api_token":      "..."
     }
   }
 }
 ```
 
-### actions.json
+Copy `config.example.json` as a starting point.
 
-Defines which tools are available and what webhook workflows exist.
+### actions.json
 
 ```json
 {
@@ -115,45 +202,15 @@ Defines which tools are available and what webhook workflows exist.
 }
 ```
 
-## Usage
+Copy `actions.example.json` as a starting point.
 
-### Start the server (webhook mode)
+## Supported LLM providers
 
-```bash
-./customclaw start
-# Listening on :8080
-# Webhook endpoint: POST /webhook/jira
-```
-
-Configure your external service (e.g. Jira) to send webhook events to `http://your-host:8080/webhook/jira`.
-
-> For local development, use a tunnel to expose the port: `ngrok http 8080`
-
-### Run a one-shot command
-
-```bash
-./customclaw run "check JIRA-123 and create a branch for it"
-```
-
-### Interactive REPL
-
-```bash
-./customclaw chat
-> notify discord that JIRA-456 is ready for review
-> also create a draft MR linked to that ticket
-```
-
-### Validate config
-
-```bash
-./customclaw validate
-```
-
-### List available tools
-
-```bash
-./customclaw tools
-```
+| Provider | Default model | Notes |
+|---|---|---|
+| `anthropic` | `claude-sonnet-4-6` | Available models fetched live from `/v1/models` |
+| `openai` | `gpt-4o` | Filtered to `gpt-*`, `o1*`, `o3*` models |
+| `gemini` | `gemini-2.0-flash` | Filtered to models supporting `generateContent` |
 
 ## Available tools
 
@@ -165,48 +222,75 @@ Configure your external service (e.g. Jira) to send webhook events to `http://yo
 | `github_create_issue` | Create a GitHub issue |
 | `github_create_mr` | Create a GitHub pull request |
 | `jira_get_ticket` | Fetch ticket details from Jira |
-| `llm_check_description` | Use the LLM to assess and improve a text description |
+| `llm_check_description` | Assess and improve a ticket or issue description |
 
-## Supported LLM providers
+## Testing
 
-| Provider | Models |
-|---|---|
-| Anthropic | claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5 |
-| OpenAI | gpt-4o, gpt-4o-mini, o1, o3-mini |
+**Interactive:**
+```bash
+./customclaw --config /tmp/cfg.json --actions /tmp/act.json setup
+./customclaw --config /tmp/cfg.json validate
+./customclaw --config /tmp/cfg.json run "say hello"
+```
 
-Set `llm.provider` and `llm.model` in `config.json` and provide the matching `api_key`.
+**Scripted (pipe input):**
+```bash
+# Each line answers one setup prompt; non-TTY skips interactive selectors
+printf 'anthropic\nsk-ant-KEY\n\n8080\nn\nn\nn\nn\nn\n' \
+  | ./customclaw --config /tmp/cfg.json --actions /tmp/act.json setup
+```
+
+**Unit tests:**
+```bash
+go test ./...
+```
 
 ## Project structure
 
 ```
 customclaw/
 ├── cmd/
-│   └── main.go               # CLI entrypoint
+│   ├── main.go          # entry point
+│   ├── root.go          # cobra root + persistent flags
+│   ├── setup.go         # setup command
+│   ├── start.go         # start command
+│   ├── run.go           # run command
+│   ├── chat.go          # chat command
+│   ├── validate.go      # validate command
+│   ├── tools.go         # tools command
+│   └── bootstrap.go     # shared wiring: config → LLM → registry → agent
 ├── internal/
-│   ├── config/               # Load and validate config.json / actions.json
-│   ├── agent/                # Agentic loop: LLM + tool calling
-│   ├── tools/                # Tool registry and implementations
-│   │   ├── registry.go
-│   │   ├── notify.go         # Discord, Google Chat
-│   │   ├── github.go         # Branch, issue, MR
-│   │   ├── jira.go           # Ticket fetch
-│   │   └── llm_check.go      # Description quality check
-│   ├── triggers/
-│   │   ├── webhook.go        # HTTP server for webhook events
-│   │   └── cli.go            # CLI command and REPL
-│   └── llm/
-│       ├── provider.go       # LLM interface
-│       ├── anthropic.go
-│       └── openai.go
-├── config.json               # Your config (not committed)
-├── actions.json              # Your workflow definitions
-├── config.example.json       # Example config to copy from
-├── actions.example.json      # Example actions to copy from
+│   ├── config/          # Load config.json and actions.json
+│   ├── agent/           # Agentic loop (ReAct pattern, max 20 iterations)
+│   ├── llm/
+│   │   ├── provider.go  # Provider interface + types
+│   │   ├── anthropic.go # Anthropic implementation + ListAnthropicModels
+│   │   ├── openai.go    # OpenAI implementation + ListOpenAIModels
+│   │   └── gemini.go    # Gemini implementation + ListGeminiModels
+│   ├── tools/
+│   │   ├── tool.go      # Tool interface
+│   │   ├── registry.go  # Registry: register, filter, execute
+│   │   ├── notify.go    # Discord, Google Chat
+│   │   ├── github.go    # Branch, issue, pull request
+│   │   ├── jira.go      # Get ticket
+│   │   └── llm_check.go # Description quality check
+│   ├── setup/
+│   │   ├── wizard.go        # Main setup wizard
+│   │   ├── actions_wizard.go # Actions.json wizard (tools + workflows)
+│   │   └── selector.go      # Arrow-key single-select and multi-select
+│   └── triggers/
+│       ├── webhook.go   # HTTP webhook server
+│       └── cli.go       # run command + chat REPL
+├── config.example.json
+├── actions.example.json
 └── CONTRIBUTING.md
 ```
 
 ## Roadmap
 
-- [ ] Phase 1: Core agent loop, webhook trigger, CLI trigger, GitHub + Jira + Discord tools
-- [ ] Phase 2: YAML action definitions, GitLab support, ClickUp support, Google Chat
-- [ ] Phase 3: Web dashboard, event history (SQLite), more LLM providers
+- [x] Phase 1: Core agent loop, webhook + CLI triggers, GitHub / Jira / Discord tools
+- [x] Phase 1: Interactive setup wizard with live model fetching and arrow-key selection
+- [x] Phase 1: Gemini LLM provider
+- [ ] Phase 2: YAML action definitions, GitLab support, ClickUp support
+- [ ] Phase 2: Mock LLM provider for testing
+- [ ] Phase 3: Web dashboard, event history (SQLite)
