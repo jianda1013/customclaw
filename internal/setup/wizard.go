@@ -40,9 +40,10 @@ func NewWizard() (*Wizard, error) {
 func (w *Wizard) Close() { w.rl.Close() }
 
 // Run executes the full setup wizard and writes config.json.
-// If outputPath already exists its values are loaded as defaults so the
+// If the files already exist their values are loaded as defaults so the
 // user can press Enter to keep any field unchanged.
-func (w *Wizard) Run(outputPath string) error {
+// actionsPath is the path for actions.json; an empty string skips the actions step.
+func (w *Wizard) Run(outputPath, actionsPath string) error {
 	// Load existing config as the starting point (all fields become defaults).
 	existing, err := config.Load(outputPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -80,6 +81,20 @@ func (w *Wizard) Run(outputPath string) error {
 
 	fmt.Fprintln(w.out)
 	fmt.Fprintf(w.out, "Configuration saved to %s\n", outputPath)
+
+	// Optional: configure actions.json now or later.
+	if actionsPath != "" {
+		fmt.Fprintln(w.out)
+		if w.confirm("Configure workflows (actions.json) now", false) {
+			if err := w.configureActions(actionsPath); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintln(w.out, "You can configure workflows later by re-running './customclaw setup'.")
+		}
+	}
+
+	fmt.Fprintln(w.out)
 	fmt.Fprintln(w.out, "Run './customclaw validate' to verify, then './customclaw start' to begin.")
 	return nil
 }
