@@ -16,6 +16,6 @@ var setupCmd = &cobra.Command{
 			return err
 		}
 		defer w.Close()
-		return w.Run(configPath)
+		return w.Run(configPath, actionsPath)
 	},
 }
