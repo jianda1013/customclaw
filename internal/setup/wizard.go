@@ -55,7 +55,7 @@ func (w *Wizard) Run(outputPath string) error {
 func (w *Wizard) configureLLM(cfg *config.Config) error {
 	w.section("LLM Configuration")
 
-	provider := w.prompt("Provider", "anthropic", "anthropic, openai")
+	provider := w.prompt("Provider", "anthropic", "anthropic, openai, gemini")
 	cfg.LLM.Provider = provider
 
 	defaultModel := defaultModelFor(provider)
@@ -193,6 +193,8 @@ func defaultModelFor(provider string) string {
 	switch provider {
 	case "openai":
 		return "gpt-4o"
+	case "gemini":
+		return "gemini-2.0-flash"
 	default:
 		return "claude-sonnet-4-6"
 	}
