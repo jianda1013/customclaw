@@ -1,13 +1,15 @@
 package triggers
 
 import (
-	"bufio"
 	"context"
 	"customclaw/internal/agent"
 	"customclaw/internal/config"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+
+	"github.com/chzyer/readline"
 )
 
 // CLITrigger handles user command workflows from the terminal.
@@ -31,23 +33,43 @@ func (c *CLITrigger) Run(command string) error {
 	return nil
 }
 
-// Chat starts an interactive REPL session.
+// Chat starts an interactive REPL with readline support:
+// arrow keys for cursor movement, ↑/↓ for history, Ctrl+C to cancel a line.
 func (c *CLITrigger) Chat() error {
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("customclaw chat — type your command, or 'exit' to quit.")
-	fmt.Println()
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "> ",
+		HistoryLimit:    200,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+	})
+	if err != nil {
+		return fmt.Errorf("init readline: %w", err)
+	}
+	defer rl.Close()
+
+	fmt.Fprintln(os.Stdout, "customclaw chat — type your command, Ctrl+C to cancel, Ctrl+D or 'exit' to quit.")
+	fmt.Fprintln(os.Stdout)
 
 	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt {
+			// Ctrl+C clears the current line; loop continues.
+			continue
+		}
+		if err == io.EOF {
+			// Ctrl+D — exit cleanly.
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		if err != nil {
+			return err
+		}
+
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		if line == "exit" || line == "quit" {
-			fmt.Println("bye.")
+			fmt.Fprintln(os.Stdout, "bye.")
 			break
 		}
 
@@ -57,9 +79,9 @@ func (c *CLITrigger) Chat() error {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		fmt.Println(result)
-		fmt.Println()
+		fmt.Fprintln(os.Stdout, result)
+		fmt.Fprintln(os.Stdout)
 	}
 
-	return scanner.Err()
+	return nil
 }

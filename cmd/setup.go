@@ -20,7 +20,11 @@ var setupCmd = &cobra.Command{
 				return nil
 			}
 		}
-		w := setup.NewWizard()
+		w, err := setup.NewWizard()
+		if err != nil {
+			return err
+		}
+		defer w.Close()
 		return w.Run(configPath)
 	},
 }
