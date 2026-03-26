@@ -50,8 +50,10 @@ func buildProvider(cfg *config.Config) (llm.Provider, error) {
 		return llm.NewAnthropic(cfg.LLM.APIKey, cfg.LLM.Model), nil
 	case "openai":
 		return llm.NewOpenAI(cfg.LLM.APIKey, cfg.LLM.Model), nil
+	case "gemini":
+		return llm.NewGemini(cfg.LLM.APIKey, cfg.LLM.Model), nil
 	default:
-		return nil, fmt.Errorf("unsupported LLM provider: %s (supported: anthropic, openai)", cfg.LLM.Provider)
+		return nil, fmt.Errorf("unsupported LLM provider: %s (supported: anthropic, openai, gemini)", cfg.LLM.Provider)
 	}
 }
 
