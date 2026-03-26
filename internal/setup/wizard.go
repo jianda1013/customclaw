@@ -261,12 +261,13 @@ func (w *Wizard) prompt(label, defaultVal, hint string) string {
 	return line
 }
 
-// secret reads masked input. If currentVal is set the prompt shows
-// "(currently set, press Enter to keep)" and returns currentVal on empty input.
+// secret reads masked input. If currentVal is set the prompt shows the last
+// 4 characters so the user can confirm which key is stored, then returns
+// currentVal on empty input.
 func (w *Wizard) secret(label, currentVal string) string {
 	promptStr := label
 	if currentVal != "" {
-		promptStr += " (currently set, press Enter to keep)"
+		promptStr += fmt.Sprintf(" (currently: ...%s, press Enter to keep)", last4(currentVal))
 	}
 	promptStr += ": "
 
@@ -354,4 +355,12 @@ func orDefault(val, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// last4 returns the last 4 characters of s, or all of s if shorter.
+func last4(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
 }
