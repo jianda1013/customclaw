@@ -21,6 +21,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "config.json", "Path to config file")
 	rootCmd.PersistentFlags().StringVar(&actionsPath, "actions", "actions.json", "Path to actions file")
 
+	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(chatCmd)
